@@ -1,0 +1,18 @@
+# Install as /etc/systemd/system/papercam.service
+# The Python pipeline: camera -> perspective warp -> MJPEG -> /dev/video10
+[Unit]
+Description=papercam capture and perspective correction
+After=papercam-gadget.service
+
+[Service]
+WorkingDirectory=/home/pi/papercam
+# Drop --auto to pin the view to a fixed calibrate.py calibration instead.
+# --paper-ae: slow auto-exposure metered on the paper (adapts to changing
+# room light); use --lock instead only if lighting is perfectly constant.
+ExecStart=/usr/bin/python3 webcam.py --paper-ae --auto
+Restart=always
+RestartSec=2
+User=pi
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+# Install as /etc/systemd/system/papercam-gadget.service
+[Unit]
+Description=Configure USB UVC gadget for papercam
+After=sys-kernel-config.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/pi/papercam/setup/usb-gadget.sh
+
+[Install]
+WantedBy=multi-user.target

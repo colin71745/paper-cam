@@ -1,0 +1,139 @@
+diff --git a/lib/v4l2-source.c b/lib/v4l2-source.c
+index e1714c9..0a61d69 100644
+--- a/lib/v4l2-source.c
++++ b/lib/v4l2-source.c
+@@ -13,6 +13,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <sys/ioctl.h>
+ 
+ #include "events.h"
+ #include "tools.h"
+@@ -24,6 +25,14 @@ struct v4l2_source {
+ 	struct video_source src;
+ 
+ 	struct v4l2_device *vdev;
++
++	/*
++	 * Sink buffers imported in VIDEO_SOURCE_ENCODED mode, used for
++	 * devices (e.g. v4l2loopback) that don't support dmabuf export.
++	 * Frames are copied from the source's mmapped buffers into the
++	 * index-paired sink buffer.
++	 */
++	struct video_buffer_set *sink_bufs;
+ };
+ 
+ #define to_v4l2_source(s) container_of(s, struct v4l2_source, src)
+@@ -38,6 +47,29 @@ static void v4l2_source_video_process(void *d)
+ 	if (ret < 0)
+ 		return;
+ 
++	if (src->src.type == VIDEO_SOURCE_ENCODED) {
++		struct video_buffer *sink_buf;
++		unsigned int bytes;
++
++		if (!src->sink_bufs || buf.index >= src->sink_bufs->nbufs ||
++		    !buf.mem) {
++			/* No sink buffer to fill: drop the frame. */
++			v4l2_queue_buffer(src->vdev, &buf);
++			return;
++		}
++
++		sink_buf = &src->sink_bufs->buffers[buf.index];
++		bytes = buf.bytesused < sink_buf->size ? buf.bytesused
++						       : sink_buf->size;
++		memcpy(sink_buf->mem, buf.mem, bytes);
++		sink_buf->bytesused = bytes;
++		sink_buf->timestamp = buf.timestamp;
++		sink_buf->error = buf.error;
++
++		src->src.handler(src->src.handler_data, &src->src, sink_buf);
++		return;
++	}
++
+ 	src->src.handler(src->src.handler_data, &src->src, &buf);
+ }
+ 
+@@ -67,8 +99,22 @@ static int v4l2_source_set_frame_rate(struct video_source *s, unsigned int fps)
+ static int v4l2_source_alloc_buffers(struct video_source *s, unsigned int nbufs)
+ {
+ 	struct v4l2_source *src = to_v4l2_source(s);
++	int ret;
++
++	ret = v4l2_alloc_buffers(src->vdev, V4L2_MEMORY_MMAP, nbufs);
++	if (ret < 0)
++		return ret;
++
++	/* In encoded (copy) mode we read frames through the CPU. */
++	if (src->src.type == VIDEO_SOURCE_ENCODED) {
++		ret = v4l2_mmap_buffers(src->vdev);
++		if (ret < 0) {
++			v4l2_free_buffers(src->vdev);
++			return ret;
++		}
++	}
+ 
+-	return v4l2_alloc_buffers(src->vdev, V4L2_MEMORY_MMAP, nbufs);
++	return 0;
+ }
+ 
+ static int v4l2_source_export_buffers(struct video_source *s,
+@@ -98,10 +144,22 @@ static int v4l2_source_export_buffers(struct video_source *s,
+ 	return 0;
+ }
+ 
++static int v4l2_source_import_buffers(struct video_source *s,
++				      struct video_buffer_set *buffers)
++{
++	struct v4l2_source *src = to_v4l2_source(s);
++
++	src->sink_bufs = buffers;
++
++	return 0;
++}
++
+ static int v4l2_source_free_buffers(struct video_source *s)
+ {
+ 	struct v4l2_source *src = to_v4l2_source(s);
+ 
++	src->sink_bufs = NULL;
++
+ 	return v4l2_free_buffers(src->vdev);
+ }
+ 
+@@ -157,6 +215,7 @@ static const struct video_source_ops v4l2_source_ops = {
+ 	.set_frame_rate = v4l2_source_set_frame_rate,
+ 	.alloc_buffers = v4l2_source_alloc_buffers,
+ 	.export_buffers = v4l2_source_export_buffers,
++	.import_buffers = v4l2_source_import_buffers,
+ 	.free_buffers = v4l2_source_free_buffers,
+ 	.stream_on = v4l2_source_stream_on,
+ 	.stream_off = v4l2_source_stream_off,
+@@ -184,6 +243,26 @@ struct video_source *v4l2_video_source_create(const char *devname)
+ 		goto err_close_v4l2;
+ 	}
+ 
++	/*
++	 * Probe for dmabuf export support. Devices such as v4l2loopback
++	 * don't implement VIDIOC_EXPBUF (ENOTTY); fall back to copying
++	 * frames through the CPU in that case. With buffers unallocated a
++	 * capable driver returns EINVAL here rather than ENOTTY.
++	 */
++	{
++		struct v4l2_exportbuffer expbuf = {
++			.type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
++			.index = 0,
++		};
++
++		if (ioctl(src->vdev->fd, VIDIOC_EXPBUF, &expbuf) < 0 &&
++		    errno == ENOTTY) {
++			printf("%s: no dmabuf export support, using CPU copy\n",
++			       src->vdev->name);
++			src->src.type = VIDEO_SOURCE_ENCODED;
++		}
++	}
++
+ 	return &src->src;
+ 
+ err_close_v4l2:

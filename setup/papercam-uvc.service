@@ -1,0 +1,18 @@
+# Install as /etc/systemd/system/papercam-uvc.service
+# Bridges /dev/video10 (loopback fed by webcam.py) to the UVC gadget endpoint.
+#
+# NOTE: the exact CLI depends on which uvc-gadget you built; run
+# `uvc-gadget -h` to confirm. Current freedesktop.org builds use
+# `-d <v4l2 source device>` as below (older versions used -c).
+[Unit]
+Description=papercam UVC gadget bridge
+After=papercam-gadget.service papercam.service
+Requires=papercam-gadget.service
+
+[Service]
+ExecStart=/usr/local/bin/uvc-gadget -d /dev/video10 uvc.0
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
