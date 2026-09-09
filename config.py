@@ -22,6 +22,11 @@ FPS = 8
 JPEG_QUALITY = 90   # text shows JPEG ringing below ~85; 90 costs
                     # ~3 MB/s at 720p15, well inside USB 2.0 isoc
 
+# Output rotation in degrees (0/90/180/270), for how the camera is
+# physically mounted: 180 for an inverted mount. Overridable per-run with
+# --rotate on webcam.py and calibrate.py.
+ROTATE = 180
+
 CALIBRATION_FILE = "calibration.json"
 
 # --- continuous tracking (webcam.py --auto) ---

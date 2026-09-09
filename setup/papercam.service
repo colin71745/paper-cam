@@ -13,9 +13,9 @@ Environment=PYTHONUNBUFFERED=1
 # Drop --auto to pin the view to a fixed calibrate.py calibration instead.
 # --paper-ae: slow auto-exposure metered on the paper (adapts to changing
 # room light); use --lock instead only if lighting is perfectly constant.
-# --rotate 180: camera is mounted inverted; drop this if you remount it.
 # --on-demand: stop capturing whenever no host app is streaming.
-ExecStart=/usr/bin/python3 webcam.py --paper-ae --auto --rotate 180 --on-demand
+# Rotation comes from ROTATE in config.py; add --rotate N to override.
+ExecStart=/usr/bin/python3 webcam.py --paper-ae --auto --on-demand
 Restart=always
 RestartSec=2
 User=pi

@@ -17,8 +17,8 @@ Other options:
   --paper auto|a4|letter   Output aspect ratio (default: auto, estimated
                            from the detected quad).
   --portrait               With a4/letter: portrait instead of landscape.
-  --rotate 0|90|180|270    Rotate the output (use 180 if the image is
-                           upside down for the camera's mounting).
+  --rotate 0|90|180|270    Rotate the output for the camera's mounting.
+                           Defaults to ROTATE in config.py.
 
 Debug output: calibration_capture.jpg (what the camera saw, with the
 detected quad drawn) and calibration_preview.jpg (the warped result).
@@ -37,6 +37,7 @@ from config import (
     CAPTURE_SIZE,
     OUTPUT_SIZE,
     CALIBRATION_FILE,
+    ROTATE,
     focal_px,
     principal_point,
 )
@@ -98,7 +99,8 @@ def main() -> None:
     ap.add_argument("--make-markers", action="store_true")
     ap.add_argument("--paper", default="auto", choices=["auto", "a4", "letter"])
     ap.add_argument("--portrait", action="store_true")
-    ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270])
+    ap.add_argument("--rotate", type=int, default=ROTATE,
+                    choices=[0, 90, 180, 270])
     args = ap.parse_args()
 
     if args.make_markers:

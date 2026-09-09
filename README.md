@@ -320,6 +320,9 @@ the camera.
 - [config.py](config.py): capture/output resolution, fps, JPEG quality.
   If you change `OUTPUT_SIZE`, update the frame descriptor in
   [usb-gadget.sh](setup/usb-gadget.sh) to match, then reboot.
+- `ROTATE` in [config.py](config.py) is the output rotation for how the
+  camera is mounted (180 for an inverted mount). Both `webcam.py` and
+  `calibrate.py` default to it; `--rotate N` overrides it for one run.
 - `webcam.py --paper-ae` (the service uses it) runs a slow software
   auto-exposure metered on the paper itself: it holds the page at constant
   brightness, adapting over a few seconds when room light changes (sun in

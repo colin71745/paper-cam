@@ -41,6 +41,7 @@ from config import (
     CALIBRATION_FILE,
     LOOPBACK_DEVICE,
     STREAM_FLAG,
+    ROTATE,
 )
 
 
@@ -366,9 +367,10 @@ def main() -> None:
     ap.add_argument("--aruco", action="store_true",
                     help="with --auto: track ArUco markers instead of paper "
                          "edges (see calibrate.py --make-markers)")
-    ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270],
-                    help="with --auto: rotate the output for the camera's "
-                         "mounting orientation")
+    ap.add_argument("--rotate", type=int, default=ROTATE,
+                    choices=[0, 90, 180, 270],
+                    help=f"rotate the output for the camera's mounting "
+                         f"orientation (default {ROTATE}, from config.py)")
     args = ap.parse_args()
     if args.lock and args.paper_ae:
         ap.error("--lock and --paper-ae are mutually exclusive")
