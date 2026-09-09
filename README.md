@@ -219,6 +219,35 @@ from the service to go back to always-on.
 `--http` ignores `--on-demand`, since the browser preview has no USB host
 to gate on.
 
+## Protecting the SD card
+
+This Pi is powered through the same cable that carries video, so every
+unplug is an unclean shutdown — the usual way to corrupt an SD card. Once
+the setup works, switch the root filesystem to read-only:
+
+```bash
+./setup/readonly.sh on && sudo reboot
+```
+
+All writes then go to RAM and are discarded at reboot, so a power cut can't
+damage anything. papercam needs no persistent writes: the stream flag lives
+in `/run`, and logs go to the journal.
+
+The cost is that *nothing* you change survives a reboot. Before a `git
+pull`, an `apt` install, editing `config.py`, or running `calibrate.py`:
+
+```bash
+./setup/readonly.sh off && sudo reboot     # make changes, then turn it back on
+```
+
+`./setup/readonly.sh status` reports both the current state and what the
+next boot will do. `/boot` is deliberately left writable so the switch keeps
+working and `config.txt` edits still persist.
+
+Escape hatch: if the Pi ever won't boot with overlay enabled, put the card
+in another machine and delete `boot=overlay` from `cmdline.txt` on the boot
+partition — that partition is FAT, so macOS and Windows can both read it.
+
 ## Getting the sharpest image
 
 The lens is manual focus *and* manual aperture, so both need setting by
