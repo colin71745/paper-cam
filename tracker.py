@@ -55,12 +55,19 @@ def _quads_match(a: np.ndarray, b: np.ndarray, tol: float) -> bool:
     return float(np.max(np.linalg.norm(a - b, axis=1))) < tol
 
 
-def _plausible(quad: np.ndarray, frame_shape) -> bool:
+def _implausible_reason(quad: np.ndarray, frame_shape):
+    """None if the quad could be a page, else why it was rejected."""
     area = cv2.contourArea(quad.astype(np.float32))
     frac = area / (frame_shape[0] * frame_shape[1])
-    if not MIN_AREA_FRAC <= frac <= MAX_AREA_FRAC:
-        return False
-    return MIN_ASPECT <= quad_aspect(quad) <= MAX_ASPECT
+    aspect = quad_aspect(quad)
+    if frac < MIN_AREA_FRAC:
+        return (f"quad too small ({frac * 100:.1f}% of frame, need "
+                f"{MIN_AREA_FRAC * 100:.0f}%) - move the camera closer")
+    if frac > MAX_AREA_FRAC:
+        return f"quad too large ({frac * 100:.1f}% of frame)"
+    if not MIN_ASPECT <= aspect <= MAX_ASPECT:
+        return f"aspect {aspect:.2f} outside {MIN_ASPECT}-{MAX_ASPECT}"
+    return None
 
 
 class AutoTracker:
@@ -74,6 +81,7 @@ class AutoTracker:
         self._candidate = None
         self._stable = 0
         self._last_seen = time.monotonic()
+        self._last_note = 0.0
         self._latest_frame = None
         self._frame_lock = threading.Lock()
         thread = threading.Thread(target=self._detect_loop, daemon=True)
@@ -81,6 +89,14 @@ class AutoTracker:
 
     def maybe_reload(self) -> None:  # same interface as Calibration
         pass
+
+    def _note(self, msg: str, every: float = 5.0) -> None:
+        """Rate-limited explanation of what detection is doing, so a page
+        that never locks says why instead of failing silently."""
+        now = time.monotonic()
+        if now - self._last_note >= every:
+            self._last_note = now
+            print(f"detect: {msg}")
 
     def submit_frame(self, frame: np.ndarray) -> None:
         """Called by the capture loop; hands the detector its input."""
@@ -101,10 +117,13 @@ class AutoTracker:
             )
             try:
                 quad = (find_aruco_quad if self.use_aruco else find_paper_quad)(small)
-            except DetectionError:
+            except DetectionError as exc:
+                self._note(str(exc))
                 self._check_lost()
                 continue
-            if not _plausible(quad, small.shape):
+            reason = _implausible_reason(quad, small.shape)
+            if reason is not None:
+                self._note(reason)
                 self._check_lost()
                 continue
             self._last_seen = time.monotonic()
@@ -145,6 +164,7 @@ class AutoTracker:
                 self._adopt(quad)
         else:
             self._candidate, self._stable = quad, 1
+            self._note("paper seen, waiting for it to settle")
 
     def _adopt(self, quad: np.ndarray) -> None:
         self.H = homography_for(

@@ -6,6 +6,10 @@ After=papercam-gadget.service
 
 [Service]
 WorkingDirectory=/home/pi/papercam
+# Without this, Python block-buffers stdout into a pipe and none of
+# webcam.py's logging (paper locks, on-demand state, tracebacks)
+# ever reaches the journal.
+Environment=PYTHONUNBUFFERED=1
 # Drop --auto to pin the view to a fixed calibrate.py calibration instead.
 # --paper-ae: slow auto-exposure metered on the paper (adapts to changing
 # room light); use --lock instead only if lighting is perfectly constant.
