@@ -65,6 +65,24 @@ image also works — all code here handles both OpenCV generations and both
 32/64-bit — and is the known-good fallback if the newer camera stack
 misbehaves on the Zero 2 W.
 
+Flash the card with Raspberry Pi Imager, setting hostname, user, Wi-Fi and
+SSH in its customisation dialog. Then, on the Pi:
+
+```bash
+git clone https://github.com/colin71745/paper-cam.git papercam
+cd papercam && ./setup.sh
+sudo reboot
+```
+
+`setup.sh` does everything below and is safe to re-run. It also rewrites the
+systemd units for wherever you cloned the project and whichever user you're
+running as, so the `/home/pi` assumption below stops being your problem.
+Then connect the Pi to the computer with its **USB data port** — the middle
+micro-USB socket labelled "USB", not "PWR IN". One cable carries both power
+and video.
+
+### What setup.sh does (and how to do it by hand)
+
 **1. Enable USB gadget mode.** In `/boot/firmware/config.txt`, add under `[all]`:
 
 ```
@@ -77,17 +95,11 @@ dtoverlay=dwc2
 sudo apt update && sudo apt install -y python3-opencv python3-picamera2 v4l2loopback-dkms git meson ninja-build build-essential pkg-config
 ```
 
-**3. Copy this project to the Pi** at `~/papercam`. Use rsync, not scp:
-`scp setup/foo.service pi@host:papercam/` silently flattens the path and
-drops the file in the wrong place.
-
-```bash
-rsync -a ./ <user>@<pi-address>:papercam/
-```
-
-If your Pi user isn't `pi`, edit `setup/papercam-gadget.service` and
-`setup/papercam.service` before installing them: both reference
-`/home/pi/papercam`, and papercam.service sets `User=pi`.
+**3. Get this project onto the Pi**, by `git clone` as above. If you copy
+from a working machine instead, use `rsync -a ./ <user>@<host>:papercam/`
+and not `scp` — `scp setup/foo.service host:papercam/` silently flattens
+the path and drops the file in the project root, where it will be missed
+and a stale copy installed instead.
 
 **4. Build uvc-gadget** (the userspace app that speaks the UVC protocol).
 This needs the patches from step 3, so do it in this order:
