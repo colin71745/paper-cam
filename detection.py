@@ -25,6 +25,26 @@ def order_corners(pts: np.ndarray) -> np.ndarray:
     )
 
 
+def _quad_from_contour(contour: np.ndarray):
+    """Reduce a contour to four corners, or None.
+
+    Real paper is rarely perfectly flat: resting on anything soft, or curling
+    slightly, bows its edges in the image, and a bowed edge approximates to
+    five or more segments at any single tolerance. So take the convex hull
+    (a page outline is convex; bumps and nicks are not) and relax the
+    polygon tolerance until exactly four corners survive.
+    """
+    hull = cv2.convexHull(contour)
+    peri = cv2.arcLength(hull, True)
+    for eps in np.arange(0.01, 0.09, 0.005):
+        approx = cv2.approxPolyDP(hull, eps * peri, True)
+        if len(approx) == 4 and cv2.isContourConvex(approx):
+            return order_corners(approx)
+        if len(approx) < 4:
+            break  # relaxing further can only lose more corners
+    return None
+
+
 def find_paper_quad(frame: np.ndarray, min_area_frac: float = 0.05) -> np.ndarray:
     """Largest 4-sided contour in the frame, as ordered corners."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -36,9 +56,9 @@ def find_paper_quad(frame: np.ndarray, min_area_frac: float = 0.05) -> np.ndarra
     for c in sorted(contours, key=cv2.contourArea, reverse=True):
         if cv2.contourArea(c) < min_area:
             break
-        approx = cv2.approxPolyDP(c, 0.02 * cv2.arcLength(c, True), True)
-        if len(approx) == 4 and cv2.isContourConvex(approx):
-            return order_corners(approx)
+        quad = _quad_from_contour(c)
+        if quad is not None:
+            return quad
     raise DetectionError("no paper-sized quadrilateral found")
 
 
