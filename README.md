@@ -8,16 +8,22 @@ computer sees an ordinary UVC webcam — no drivers or software needed there.
 
 ```
 HQ camera (2028x1520, via picamera2)
-  └─ webcam.py: cv2.warpPerspective → 1280x720 → JPEG encode
+  └─ webcam.py: cv2.warpPerspective → 1920x1080 → JPEG encode
        └─ /dev/video10 (v4l2loopback)
             └─ uvc-gadget (handles the UVC protocol)
                  └─ USB OTG port → host sees "Paper Camera"
 ```
 
-The per-frame cost is just one warp + one JPEG encode; expect roughly
-10–15 fps at 720p on the Zero 2 W — fine for paper. The homography comes
-from either continuous tracking (`--auto`, the default in the service) or a
-one-shot calibration (`calibrate.py`).
+The per-frame cost is one warp plus one JPEG encode, both scaling with
+*output* pixels. Measured on a Zero 2 W: about 6 fps at 720p, and slower at
+the 1080p default. That is a deliberate trade — for a document camera,
+resolution beats frame rate, and the captured page spans ~1300-1900 px, so
+a 720p output was discarding real detail. To go back to a faster, smaller
+image, set `OUTPUT_SIZE` in [config.py](config.py) *and* the frame
+descriptor in [usb-gadget.sh](setup/usb-gadget.sh) to 1280x720, then reboot.
+
+The homography comes from either continuous tracking (`--auto`, the default
+in the service) or a one-shot calibration (`calibrate.py`).
 
 ## Auto-tracking mode
 
@@ -71,21 +77,39 @@ dtoverlay=dwc2
 sudo apt update && sudo apt install -y python3-opencv python3-picamera2 v4l2loopback-dkms git meson ninja-build build-essential pkg-config
 ```
 
-**3. Build uvc-gadget** (the userspace app that speaks the UVC protocol):
+**3. Copy this project to the Pi** at `~/papercam`. Use rsync, not scp:
+`scp setup/foo.service pi@host:papercam/` silently flattens the path and
+drops the file in the wrong place.
+
+```bash
+rsync -a ./ <user>@<pi-address>:papercam/
+```
+
+If your Pi user isn't `pi`, edit `setup/papercam-gadget.service` and
+`setup/papercam.service` before installing them: both reference
+`/home/pi/papercam`, and papercam.service sets `User=pi`.
+
+**4. Build uvc-gadget** (the userspace app that speaks the UVC protocol).
+This needs the patches from step 3, so do it in this order:
 
 ```bash
 git clone https://gitlab.freedesktop.org/camera/uvc-gadget.git
 cd uvc-gadget
 git apply ~/papercam/setup/uvc-gadget-cpu-copy.patch
+git apply ~/papercam/setup/uvc-gadget-stream-flag.patch
 meson setup build && ninja -C build && sudo ninja -C build install && sudo ldconfig
 ```
 
-The patch is required: stock uvc-gadget streams by exporting the source's
-buffers as DMABUFs, which v4l2loopback doesn't support (`Failed to export
-buffers on source: Inappropriate ioctl for device`) — the stream silently
-delivers nothing. The patch auto-detects this and falls back to copying
+The first patch is required: stock uvc-gadget streams by exporting the
+source's buffers as DMABUFs, which v4l2loopback doesn't support (`Failed to
+export buffers on source: Inappropriate ioctl for device`) — the stream
+silently delivers nothing. The patch detects this and falls back to copying
 frames through the CPU (the same ENCODED path uvc-gadget's libcamera/MJPEG
 source uses).
+
+The second patch makes uvc-gadget publish whether the host is streaming
+(see **On-demand capture** below). It's a no-op unless
+`UVC_GADGET_STREAM_FLAG` is set, so it's safe either way.
 
 The `ldconfig` matters: without it the freshly installed `libuvcgadget.so`
 isn't in the linker cache and uvc-gadget exits instantly with "cannot open
@@ -94,21 +118,10 @@ connection deactivated until uvc-gadget opens it, the symptom is the host
 seeing *no USB device at all* (UDC state stuck at `not attached`) — which
 looks exactly like a bad cable.
 
-**4. Copy this project to the Pi** at `~/papercam`. Modern scp won't create
-the remote directory itself, so make it first:
-
-```bash
-ssh <user>@<pi-address> 'mkdir -p papercam'
-scp -r ./* <user>@<pi-address>:papercam/
-```
-
-If your Pi user isn't `pi`, edit `setup/papercam-gadget.service` and
-`setup/papercam.service` before installing them: both reference
-`/home/pi/papercam`, and papercam.service sets `User=pi`.
-
 **5. Install the loopback + service config on the Pi:**
 
 ```bash
+cd ~/papercam
 sudo cp setup/v4l2loopback.conf /etc/modprobe.d/papercam-v4l2loopback.conf
 echo v4l2loopback | sudo tee /etc/modules-load.d/papercam.conf
 chmod +x setup/usb-gadget.sh
@@ -151,6 +164,48 @@ Common fixes: image upside down → `--rotate 180`; wrong aspect ratio →
 
 While the webcam is running, re-running `calibrate.py` takes effect within a
 second — `webcam.py` hot-reloads the calibration file.
+
+## On-demand capture
+
+Unlike a USB webcam with an activity light, nothing about this device tells
+you whether it is looking at your desk - and the HQ camera has no LED at
+all. Left to itself the pipeline would capture, detect and encode from boot
+to shutdown, using about two of the Pi's four cores continuously whether or
+not anything was watching.
+
+`webcam.py --on-demand` (in the service by default) fixes that. uvc-gadget
+creates `/run/papercam-streaming` when the host starts streaming and
+removes it when it stops; webcam.py watches that file and calls
+`picam2.stop()` in between, so between calls the sensor is not capturing
+and the CPU is essentially idle. Starting a call brings it back in about
+half a second: the exposure it had settled on is reused rather than
+re-converged, and the tracker keeps its homography, so the paper lock is
+immediate.
+
+One constraint worth knowing if you modify this: while idle, webcam.py
+keeps writing a **blank frame a few times a second**. That is deliberate and
+must not be optimised away. v4l2loopback only presents a usable capture
+device while a producer is writing, and uvc-gadget opens `/dev/video10` at
+its own startup - starve it and it fails with `unable to enumerate formats`,
+crash-loops, and the USB function never stays activated, so the host sees a
+malfunctioning device rather than a webcam. Only the *camera* stops when
+idle; the pipe stays alive at negligible cost (one pre-encoded JPEG).
+
+Check what it's doing at any time:
+
+```bash
+ls /run/papercam-streaming        # exists only while a host is streaming
+journalctl -u papercam | tail     # logs each "camera live"/"camera idle"
+```
+
+This depends on `setup/uvc-gadget-stream-flag.patch` being built in. If
+uvc-gadget is unpatched the flag never appears and the camera stays idle
+forever (a black image on the host); `journalctl -u papercam` says
+`On-demand: idle until the host streams` in that case. Drop `--on-demand`
+from the service to go back to always-on.
+
+`--http` ignores `--on-demand`, since the browser preview has no USB host
+to gate on.
 
 ## Getting the sharpest image
 
