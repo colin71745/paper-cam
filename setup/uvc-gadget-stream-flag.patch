@@ -1,0 +1,63 @@
+diff --git a/lib/stream.c b/lib/stream.c
+index 3bd3e60..d4b6760 100644
+--- a/lib/stream.c
++++ b/lib/stream.c
+@@ -11,6 +11,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <unistd.h>
+ 
+ #include "events.h"
+ #include "stream.h"
+@@ -234,10 +235,41 @@ error_free_source:
+ 	return ret;
+ }
+ 
++/*
++ * Publish whether the host is streaming, so an external frame producer can
++ * idle its camera when nothing is watching. Enabled by setting
++ * UVC_GADGET_STREAM_FLAG to a path; the file exists while streaming.
++ */
++static void uvc_stream_publish(bool streaming)
++{
++	const char *path = getenv("UVC_GADGET_STREAM_FLAG");
++	FILE *f;
++
++	if (!path)
++		return;
++
++	if (!streaming) {
++		unlink(path);
++		return;
++	}
++
++	f = fopen(path, "w");
++	if (f)
++		fclose(f);
++	else
++		printf("Unable to write stream flag %s (%d)\n", path, errno);
++}
++
+ static int uvc_stream_start(struct uvc_stream *stream)
+ {
+ 	printf("Starting video stream.\n");
+ 
++	/*
++	 * Signal before setting up, so a producer that has to spin up a
++	 * camera can start doing so while we allocate buffers.
++	 */
++	uvc_stream_publish(true);
++
+ 	switch (stream->src->type) {
+ 	case VIDEO_SOURCE_DMABUF:
+ 		video_source_set_buffer_handler(stream->src, uvc_stream_source_process,
+@@ -263,6 +295,8 @@ static int uvc_stream_stop(struct uvc_stream *stream)
+ 
+ 	printf("Stopping video stream.\n");
+ 
++	uvc_stream_publish(false);
++
+ 	events_unwatch_fd(stream->events, sink->fd, EVENT_WRITE);
+ 
+ 	v4l2_stream_off(sink);

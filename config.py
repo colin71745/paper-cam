@@ -28,6 +28,12 @@ AUTO_LOST_TIMEOUT = 8.0       # seconds without any paper detection before
                               # reverting to the raw (uncorrected) view; a
                               # hand briefly covering the page stays held
 
+# Flag file uvc-gadget maintains while the USB host is actually streaming
+# (see setup/uvc-gadget-stream-flag.patch). webcam.py --on-demand watches it
+# and idles the camera when nothing is watching. In /run, so it is always
+# absent after a reboot.
+STREAM_FLAG = "/run/papercam-streaming"
+
 # v4l2loopback device that webcam.py writes to and uvc-gadget reads from.
 LOOPBACK_DEVICE = "/dev/video10"
 

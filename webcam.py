@@ -27,6 +27,7 @@ Until a homography exists, the raw (uncorrected, scaled) view is streamed.
 import argparse
 import json
 import os
+import threading
 import time
 
 import cv2
@@ -39,6 +40,7 @@ from config import (
     JPEG_QUALITY,
     CALIBRATION_FILE,
     LOOPBACK_DEVICE,
+    STREAM_FLAG,
 )
 
 
@@ -77,7 +79,8 @@ class Calibration:
             self.reload()
 
 
-def start_camera(lock: bool):
+def create_camera():
+    """Configure the camera without starting it; frames() controls capture."""
     from picamera2 import Picamera2
 
     picam2 = Picamera2()
@@ -87,21 +90,22 @@ def start_camera(lock: bool):
         buffer_count=3,
     )
     picam2.configure(cfg)
-    picam2.start()
-    if lock:
-        time.sleep(2)  # let AE/AWB converge, then freeze them
-        md = picam2.capture_metadata()
-        picam2.set_controls(
-            {
-                "AeEnable": False,
-                "AwbEnable": False,
-                "ExposureTime": md["ExposureTime"],
-                "AnalogueGain": md["AnalogueGain"],
-                "ColourGains": md["ColourGains"],
-            }
-        )
-        print("Exposure and white balance locked.")
     return picam2
+
+
+def apply_lock(picam2) -> None:
+    time.sleep(2)  # let AE/AWB converge, then freeze them
+    md = picam2.capture_metadata()
+    picam2.set_controls(
+        {
+            "AeEnable": False,
+            "AwbEnable": False,
+            "ExposureTime": md["ExposureTime"],
+            "AnalogueGain": md["AnalogueGain"],
+            "ColourGains": md["ColourGains"],
+        }
+    )
+    print("Exposure and white balance locked.")
 
 
 def make_provider(args):
@@ -135,9 +139,19 @@ class PaperExposure:
     MIN_GAIN, MAX_GAIN = 1.0, 16.0
     MID_GAIN = 4.0     # exposure is chosen to park gain here at startup
 
-    def __init__(self, picam2, fps):
+    def __init__(self, picam2, fps, seed=None):
         self.picam2 = picam2
         self.max_exposure = int(0.9 * 1_000_000 / fps)  # stay under frame time
+        if seed is not None:
+            # Resuming from idle: reuse the exposure we had settled on rather
+            # than waiting for AE to converge again (and visibly flashing).
+            self.exposure, self.gain = seed
+            picam2.set_controls(
+                {"AeEnable": False, "ExposureTime": self.exposure,
+                 "AnalogueGain": self.gain}
+            )
+            self.last = time.monotonic()
+            return
         time.sleep(2)  # let camera AE converge once, then take over from it
         md = picam2.capture_metadata()
         # Fix the exposure time so that gain lands mid-range, then adjust
@@ -155,6 +169,10 @@ class PaperExposure:
         )
         self.last = time.monotonic()
         print("Paper-metered auto-exposure active (gain-only adjustments).")
+
+    def state(self):
+        """Current (exposure, gain), to seed the next session after idling."""
+        return self.exposure, self.gain
 
     def update(self, out: np.ndarray) -> None:
         now = time.monotonic()
@@ -189,10 +207,49 @@ class PaperExposure:
 
 
 def frames(args):
-    """Yields perspective-corrected JPEG frames forever."""
-    picam2 = start_camera(args.lock)
+    """Yields perspective-corrected JPEG frames forever.
+
+    With --on-demand, capture only runs while the USB host is actually
+    streaming (uvc-gadget maintains the flag file). Between calls the sensor
+    is stopped: no capture, no processing, near-zero CPU.
+    """
     provider = make_provider(args)
-    paper_ae = PaperExposure(picam2, FPS) if args.paper_ae else None
+    gate = args.on_demand and args.stream_flag
+    running = False
+    paper_ae, ae_seed = None, None
+    if gate:
+        print(f"On-demand: idle until the host streams (flag {gate}).")
+    # While idle we stop the camera but must KEEP FEEDING the loopback:
+    # v4l2loopback only presents a usable capture device while a producer is
+    # writing, and uvc-gadget opens (and re-opens) /dev/video10 at its own
+    # startup. Starve it and it fails with "unable to enumerate formats",
+    # crash-loops, and the USB gadget never stays activated - the host then
+    # sees a device that malfunctions rather than a webcam.
+    idle_jpeg = cv2.imencode(
+        ".jpg", np.zeros((OUTPUT_SIZE[1], OUTPUT_SIZE[0], 3), np.uint8),
+        [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY],
+    )[1].tobytes()
+
+    # Bringing up libcamera takes ~20s on a Zero 2 W. Do it on a background
+    # thread and write blanks meanwhile: uvc-gadget opens /dev/video10 at its
+    # own startup and exits ("unable to enumerate formats") if no producer is
+    # writing, so a silent startup window makes it crash-loop and the USB
+    # gadget flap.
+    init = {}
+
+    def _open_camera():
+        try:
+            init["cam"] = create_camera()
+        except BaseException as exc:            # surfaced in the main loop
+            init["error"] = exc
+
+    threading.Thread(target=_open_camera, daemon=True).start()
+    while "cam" not in init:
+        if "error" in init:
+            raise init["error"]
+        yield idle_jpeg
+        time.sleep(0.2)
+    picam2 = init["cam"]
     # --rotate is baked into the homography for the corrected view; the raw
     # fallback view has to be rotated explicitly. (90/270 rotate within the
     # same output frame, so the aspect ratio is squashed - only 180 is a
@@ -205,6 +262,27 @@ def frames(args):
     encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
     n, t0 = 0, time.monotonic()
     while True:
+        if gate and not os.path.exists(gate):
+            if running:
+                if paper_ae is not None:
+                    ae_seed = paper_ae.state()  # resume where we left off
+                    paper_ae = None
+                picam2.stop()
+                running = False
+                print("Host stopped streaming — camera idle.")
+            yield idle_jpeg      # keeps the loopback (and uvc-gadget) alive
+            time.sleep(0.2)
+            continue
+        if not running:
+            picam2.start()
+            running = True
+            if args.lock:
+                apply_lock(picam2)
+            if args.paper_ae:
+                paper_ae = PaperExposure(picam2, FPS, seed=ae_seed)
+            if gate:
+                print("Host started streaming — camera live.")
+            n, t0 = 0, time.monotonic()
         frame = picam2.capture_array()
         if args.auto:
             provider.submit_frame(frame)
@@ -275,6 +353,13 @@ def main() -> None:
                          "(recommended); mutually exclusive with --lock")
     ap.add_argument("--lock", action="store_true",
                     help="freeze exposure/white balance after startup")
+    ap.add_argument("--on-demand", action="store_true",
+                    help="only capture while the USB host is streaming; stop "
+                         "the camera in between (needs uvc-gadget built with "
+                         "setup/uvc-gadget-stream-flag.patch)")
+    ap.add_argument("--stream-flag", default=STREAM_FLAG, metavar="PATH",
+                    help=f"flag file uvc-gadget writes while streaming "
+                         f"(default {STREAM_FLAG})")
     ap.add_argument("--auto", action="store_true",
                     help="continuously track the paper instead of using a "
                          "fixed calibration")
@@ -287,6 +372,10 @@ def main() -> None:
     args = ap.parse_args()
     if args.lock and args.paper_ae:
         ap.error("--lock and --paper-ae are mutually exclusive")
+    if args.http and args.on_demand:
+        # The browser preview has no UVC host to gate on; it would sit idle.
+        print("--http: ignoring --on-demand (no USB host involved).")
+        args.on_demand = False
     if args.http:
         run_http(args.http, args)
     else:

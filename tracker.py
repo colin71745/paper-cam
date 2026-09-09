@@ -110,6 +110,10 @@ class AutoTracker:
                 frame = self._latest_frame
                 self._latest_frame = None
             if frame is None:
+                # No input to judge (e.g. --on-demand idle): the lost timer
+                # measures time spent looking and failing, not time not
+                # looking, so keep it fresh and hold the current view.
+                self._last_seen = time.monotonic()
                 continue
             small = cv2.resize(
                 frame, None, fx=AUTO_DETECT_SCALE, fy=AUTO_DETECT_SCALE,

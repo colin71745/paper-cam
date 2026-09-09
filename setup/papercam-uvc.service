@@ -10,7 +10,12 @@ After=papercam-gadget.service papercam.service
 Requires=papercam-gadget.service
 
 [Service]
+# Tells uvc-gadget to publish host streaming state here, so webcam.py
+# --on-demand knows when to run the camera. Needs the stream-flag patch.
+Environment=UVC_GADGET_STREAM_FLAG=/run/papercam-streaming
 ExecStart=/usr/local/bin/uvc-gadget -d /dev/video10 uvc.0
+# Never leave a stale flag behind (it would pin the camera on).
+ExecStopPost=-/bin/rm -f /run/papercam-streaming
 Restart=always
 RestartSec=2
 
