@@ -9,10 +9,16 @@ homography is expressed in capture-pixel coordinates.
 CAPTURE_SIZE = (2028, 1520)
 
 # What the host computer sees. Must match the frame descriptor configured
-# in setup/usb-gadget.sh.
-OUTPUT_SIZE = (1280, 720)
+# in setup/usb-gadget.sh (change both, then reboot).
+# 1080p: the captured page spans ~1300-1900px, so a 720p output was
+# discarding real detail. Costs frame rate (the warp and JPEG encode scale
+# with output pixels) - a fine trade for a document camera.
+OUTPUT_SIZE = (1920, 1080)
 
-FPS = 15
+# Requested sensor rate. The pipeline is slower than this in practice; the
+# value's real job is to cap exposure time (0.9/FPS), so a lower number
+# permits longer exposures and therefore less gain and less noise.
+FPS = 8
 JPEG_QUALITY = 90   # text shows JPEG ringing below ~85; 90 costs
                     # ~3 MB/s at 720p15, well inside USB 2.0 isoc
 

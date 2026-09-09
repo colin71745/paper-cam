@@ -34,22 +34,22 @@ echo "UVC" > configs/c.1/strings/0x409/configuration
 echo 500 > configs/c.1/MaxPower
 
 mkdir -p functions/uvc.0
-# 1024 (plain isoc) rather than 3072 (high-bandwidth isoc): still 4x the
-# bandwidth MJPEG 720p15 needs, and macOS is picky about high-bandwidth
-# isochronous streams from gadgets.
+# 1024 (plain isoc) gives 8 MB/s, comfortably above the ~2 MB/s that
+# 1080p MJPEG at these frame rates needs. Deliberately not 3072
+# (high-bandwidth isoc): macOS rejects those streams from gadgets.
 echo 1024 > functions/uvc.0/streaming_maxpacket
 
-# --- MJPEG 1280x720 frame descriptor ---
-FRAME=functions/uvc.0/streaming/mjpeg/m/720p
+# --- MJPEG 1920x1080 frame descriptor (must match OUTPUT_SIZE) ---
+FRAME=functions/uvc.0/streaming/mjpeg/m/1080p
 mkdir -p "$FRAME"
-echo 1280 > "$FRAME/wWidth"
-echo 720  > "$FRAME/wHeight"
+echo 1920 > "$FRAME/wWidth"
+echo 1080 > "$FRAME/wHeight"
 echo 29491200  > "$FRAME/dwMinBitRate"
-echo 100000000 > "$FRAME/dwMaxBitRate"
-echo 1843200   > "$FRAME/dwMaxVideoFrameBufferSize"   # 1280*720*2
-echo 666666    > "$FRAME/dwDefaultFrameInterval"      # 15 fps (units: 100ns)
-# UVC spec: intervals must be listed in ascending order (30 fps, then 15).
-printf '333333\n666666\n' > "$FRAME/dwFrameInterval"
+echo 150000000 > "$FRAME/dwMaxBitRate"
+echo 4147200   > "$FRAME/dwMaxVideoFrameBufferSize"   # 1920*1080*2
+echo 1000000   > "$FRAME/dwDefaultFrameInterval"      # 10 fps (units: 100ns)
+# UVC spec: intervals must be listed in ascending order.
+printf '666666\n1000000\n2000000\n' > "$FRAME/dwFrameInterval"
 
 # --- wire format -> header -> class descriptors ---
 mkdir -p functions/uvc.0/streaming/header/h
